@@ -17,9 +17,9 @@ Hệ thống quản lý nhân sự và chấm công bằng FaceID, gồm Next.js
 
 ### Database
 
-Import file `be/database/facelog_schema_seed.sql` vào MariaDB/MySQL. Schema mặc định là `facelog_db`.
+Import file `be/database/facelog_schema_seed.sql` vào MariaDB/MySQL. Schema mặc định là `facelog_db`. File này đã bao gồm đầy đủ cấu trúc mới nhất và các trigger migration, vì vậy môi trường cài mới không cần chạy thêm migration.
 
-Với database đã tồn tại từ phiên bản cũ, chạy thêm migration `be/database/migrations/20260721_employee_termination_triggers.sql` để bổ sung trigger kiểm tra ngày nghỉ việc.
+Chỉ với database đã tồn tại từ phiên bản cũ, chạy migration `be/database/migrations/20260721_employee_termination_triggers.sql` để bổ sung trigger kiểm tra ngày nghỉ việc.
 
 ### Backend
 

@@ -210,7 +210,7 @@ CREATE TABLE `departments` (
 
 LOCK TABLES `departments` WRITE;
 /*!40000 ALTER TABLE `departments` DISABLE KEYS */;
-INSERT INTO `departments` VALUES (1,'HR','Phong Nhan su','Quan ly nhan su va cham cong',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(2,'IT','Phong Cong nghe','Van hanh he thong va san pham',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(3,'OPS','Phong Van hanh','Dieu phoi van hanh hang ngay',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(4,'FIN','Phong Tai chinh','Tai chinh ke toan',1,'2026-07-16 21:44:07','2026-07-16 21:44:07');
+INSERT INTO `departments` VALUES (1,'HR','Phòng Nhân Sự','Quản lý nhân sự và chấm công',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(2,'IT','Phòng Công Nghệ','Vận hành hệ thống và sản phẩm',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(3,'OPS','Phòng Vận Hành','Điều phối vận hành hàng ngày',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(4,'FIN','Phòng Tài Chính','Tài chính kế toán',1,'2026-07-16 21:44:07','2026-07-16 21:44:07');
 /*!40000 ALTER TABLE `departments` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -244,7 +244,7 @@ CREATE TABLE `devices` (
 
 LOCK TABLES `devices` WRITE;
 /*!40000 ALTER TABLE `devices` DISABLE KEYS */;
-INSERT INTO `devices` VALUES (1,'CAM-MAIN-01','Camera Cong chinh','CAMERA','Cong chinh','192.168.1.50','ONLINE','2026-07-16 21:45:17','2026-07-16 21:44:07','2026-07-16 21:45:17'),(2,'KIOSK-HR-01','Kiosk Phong Nhan su','KIOSK','Tang 1 - HR','192.168.1.51','ONLINE','2026-07-16 21:45:17','2026-07-16 21:44:07','2026-07-16 21:45:17'),(3,'WEB-ADMIN','Web Admin','WEB','Noi bo',NULL,'ONLINE','2026-07-16 21:45:17','2026-07-16 21:44:07','2026-07-16 21:45:17');
+INSERT INTO `devices` VALUES (1,'CAM-MAIN-01','Camera Cổng Chính','CAMERA','Cổng Chính','192.168.1.50','ONLINE','2026-07-16 21:45:17','2026-07-16 21:44:07','2026-07-16 21:45:17'),(2,'KIOSK-HR-01','Kiosk Phòng Nhân Sự','KIOSK','Tầng 1 - HR','192.168.1.51','ONLINE','2026-07-16 21:45:17','2026-07-16 21:44:07','2026-07-16 21:45:17'),(3,'WEB-ADMIN','Web Admin','WEB','Nội bộ',NULL,'ONLINE','2026-07-16 21:45:17','2026-07-16 21:44:07','2026-07-16 21:45:17');
 /*!40000 ALTER TABLE `devices` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -296,7 +296,7 @@ CREATE TABLE `employees` (
   `employee_code` varchar(30) NOT NULL,
   `full_name` varchar(150) NOT NULL,
   `gender` enum('MALE','FEMALE','OTHER') DEFAULT NULL,
-  `date_of_birth` date DEFAULT NULL,
+  `date_of_birth` date NOT NULL,
   `email` varchar(150) DEFAULT NULL,
   `phone` varchar(30) DEFAULT NULL,
   `address` varchar(500) DEFAULT NULL,
@@ -328,7 +328,7 @@ CREATE TABLE `employees` (
 
 LOCK TABLES `employees` WRITE;
 /*!40000 ALTER TABLE `employees` DISABLE KEYS */;
-INSERT INTO `employees` VALUES (1,'EMP001','Nguyen Minh Anh','FEMALE','1992-05-12','anh.nguyen@hutech.local','0901000001',NULL,1,1,'FULL_TIME','ACTIVE','2021-03-15',NULL,NULL,NULL,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(2,'EMP002','Tran Quoc Bao','MALE','1994-08-21','bao.tran@hutech.local','0901000002',NULL,2,3,'FULL_TIME','ACTIVE','2022-07-01',NULL,NULL,NULL,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(3,'EMP003','Le Thi Cam','FEMALE','1996-01-09','cam.le@hutech.local','0901000003',NULL,3,6,'FULL_TIME','ACTIVE','2023-02-10',NULL,NULL,NULL,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(4,'EMP004','Pham Gia Huy','MALE','1990-11-30','huy.pham@hutech.local','0901000004',NULL,4,5,'FULL_TIME','ACTIVE','2020-09-05',NULL,NULL,NULL,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(5,'EMP005','Vo Ngoc Lan','FEMALE','1998-04-18','lan.vo@hutech.local','0901000005',NULL,1,2,'FULL_TIME','ACTIVE','2024-01-08',NULL,NULL,NULL,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(6,'EMP006','Dang Thanh Son','MALE','1988-10-03','son.dang@hutech.local','0901000006',NULL,3,4,'FULL_TIME','ACTIVE','2019-06-20',NULL,NULL,NULL,'2026-07-16 21:44:07','2026-07-16 21:44:07');
+INSERT INTO `employees` VALUES (1,'ANM0120592','Nguyễn Minh Anh','FEMALE','1992-05-12','anh.nguyen@hutech.local','0901000001',NULL,1,1,'FULL_TIME','ACTIVE','2021-03-15',NULL,NULL,NULL,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(2,'BTQ0210894','Trần Quốc Bảo','MALE','1994-08-21','bao.tran@hutech.local','0901000002',NULL,2,3,'FULL_TIME','ACTIVE','2022-07-01',NULL,NULL,NULL,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(3,'CLTN0090196','Lê Thị Ngọc Cẩm','FEMALE','1996-01-09','cam.le@hutech.local','0901000003',NULL,3,6,'FULL_TIME','ACTIVE','2023-02-10',NULL,NULL,NULL,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(4,'HPG0301190','Pham Gia Huy','MALE','1990-11-30','huy.pham@hutech.local','0901000004',NULL,4,5,'FULL_TIME','ACTIVE','2020-09-05',NULL,NULL,NULL,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(5,'LVN0180498','Vo Ngoc Lan','FEMALE','1998-04-18','lan.vo@hutech.local','0901000005',NULL,1,2,'FULL_TIME','ACTIVE','2024-01-08',NULL,NULL,NULL,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(6,'SDT0031088','Dang Thanh Son','MALE','1988-10-03','son.dang@hutech.local','0901000006',NULL,3,4,'FULL_TIME','ACTIVE','2019-06-20',NULL,NULL,NULL,'2026-07-16 21:44:07','2026-07-16 21:44:07');
 /*!40000 ALTER TABLE `employees` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -478,7 +478,7 @@ CREATE TABLE `positions` (
 
 LOCK TABLES `positions` WRITE;
 /*!40000 ALTER TABLE `positions` DISABLE KEYS */;
-INSERT INTO `positions` VALUES (1,'HRM','Truong phong Nhan su','Manager',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(2,'HRS','Chuyen vien Nhan su','Staff',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(3,'DEV','Lap trinh vien','Staff',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(4,'SEC','Nhan vien Bao ve','Staff',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(5,'ACC','Ke toan vien','Staff',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(6,'OPS','Dieu phoi vien','Staff',1,'2026-07-16 21:44:07','2026-07-16 21:44:07');
+INSERT INTO `positions` VALUES (1,'HRM','Trưởng Phòng Nhân Sự','Manager',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(2,'HRS','Chuyên Viên Nhân Sự','Staff',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(3,'DEV','Lập Trình Viên','Staff',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(4,'SEC','Nhân Viên Bảo Vệ','Staff',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(5,'ACC','Kế Toán Viên','Staff',1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(6,'OPS','Điều Phối Viên','Staff',1,'2026-07-16 21:44:07','2026-07-16 21:44:07');
 /*!40000 ALTER TABLE `positions` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -595,7 +595,7 @@ CREATE TABLE `shifts` (
 
 LOCK TABLES `shifts` WRITE;
 /*!40000 ALTER TABLE `shifts` DISABLE KEYS */;
-INSERT INTO `shifts` VALUES (1,'HC','Gio hanh chinh','08:00:00','17:00:00',60,10,10,480,0,1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(2,'S1','Ca sang','06:00:00','14:00:00',30,5,5,450,0,1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(3,'S2','Ca chieu','14:00:00','22:00:00',30,5,5,450,0,1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(4,'N1','Ca dem','22:00:00','06:00:00',30,5,5,450,1,1,'2026-07-16 21:44:07','2026-07-16 21:44:07');
+INSERT INTO `shifts` VALUES (1,'HC','Giờ Hành Chính','08:00:00','17:00:00',60,10,10,480,0,1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(2,'S1','Ca sáng','06:00:00','14:00:00',30,5,5,450,0,1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(3,'S2','Ca chiều','14:00:00','22:00:00',30,5,5,450,0,1,'2026-07-16 21:44:07','2026-07-16 21:44:07'),(4,'N1','Ca tối','22:00:00','06:00:00',30,5,5,450,1,1,'2026-07-16 21:44:07','2026-07-16 21:44:07');
 /*!40000 ALTER TABLE `shifts` ENABLE KEYS */;
 UNLOCK TABLES;
 
