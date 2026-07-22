@@ -49,7 +49,7 @@ cd fe
 npm run dev:https
 ```
 
-Script tự nhận IP LAN và in địa chỉ dạng `https://192.168.x.x:3000`. Lần chạy đầu Next.js sẽ tạo CA/chứng chỉ phát triển. Máy hoặc điện thoại truy cập cũng phải tin cậy CA này; file CA gốc nằm trong thư mục được Next.js thông báo khi khởi động. Có thể ép IP khi máy có nhiều card mạng bằng PowerShell:
+Script tự nhận IP LAN và in địa chỉ dạng `https://192.168.x.x:3000`. Lần chạy đầu script sẽ dùng `mkcert` để tạo CA/chứng chỉ phát triển và có thể yêu cầu quyền cài CA. Máy hoặc điện thoại truy cập cũng phải tin cậy CA này; file CA gốc nằm trong thư mục `mkcert` được thông báo khi khởi động. Cảnh báo không cài được Java trust store có thể bỏ qua nếu chỉ dùng trình duyệt. Có thể ép IP khi máy có nhiều card mạng bằng PowerShell:
 
 ```powershell
 $env:DEV_HTTPS_HOST="192.168.22.105"
