@@ -1,14 +1,15 @@
 'use client';
 
-import { Bug, Camera, CheckCircle2, CircleDot, CircleX, Clock3, IdCard, Loader2, LogIn, LogOut, RotateCcw, ScanFace } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, EmployeeRow, FaceCheckResult, FaceMatch, enrollFaceId, faceCheck, verifyFaceId } from '@/lib/api';
+import { Bug, Camera, CheckCircle2, CircleDot, CircleX, Clock3, IdCard, Loader2, LogIn, LogOut, Maximize2, Minimize2, RotateCcw, ScanFace } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 type FaceIdPanelProps = {
   employees: EmployeeRow[];
   mode: 'attendance' | 'enroll';
   onDone: () => Promise<void>;
   isAdmin?: boolean;
+  serverTime?: string | null;
 };
 
 type FacePoint = {
@@ -49,7 +50,8 @@ const HOLD_DURATION_MS = 800;
 const LOW_QUALITY_FAILURE_MS = 3000;
 const ATTENDANCE_DEVICE_ID = Number(process.env.NEXT_PUBLIC_ATTENDANCE_DEVICE_ID ?? '1');
 
-export function FaceIdPanel({ employees, mode, onDone, isAdmin = false }: FaceIdPanelProps) {
+export function FaceIdPanel({ employees, mode, onDone, isAdmin = false, serverTime = null }: FaceIdPanelProps) {
+  const faceLayoutRef = useRef<HTMLElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -84,6 +86,7 @@ export function FaceIdPanel({ employees, mode, onDone, isAdmin = false }: FaceId
   const [debugMode, setDebugMode] = useState(false);
   const [debugResponse, setDebugResponse] = useState<unknown>(null);
   const [demoEventType, setDemoEventType] = useState<DemoEventType>('CHECK_IN');
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const activeEmployees = useMemo(
     () => employees.filter((employee) => employee.employmentStatus === 'ACTIVE'),
@@ -94,6 +97,26 @@ export function FaceIdPanel({ employees, mode, onDone, isAdmin = false }: FaceId
     void startCamera();
     return () => stopCamera();
   }, []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => setIsFullscreen(document.fullscreenElement === faceLayoutRef.current);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else if (faceLayoutRef.current?.requestFullscreen) {
+        await faceLayoutRef.current.requestFullscreen();
+      } else {
+        setIsFullscreen((current) => !current);
+      }
+    } catch {
+      setIsFullscreen((current) => !current);
+    }
+  }
 
   async function startCamera() {
     if (streamRef.current) return;
@@ -178,21 +201,35 @@ export function FaceIdPanel({ employees, mode, onDone, isAdmin = false }: FaceId
     const canvas = canvasRef.current;
     const detector = detectorRef.current as
       | {
-          detectForVideo: (
-            video: HTMLVideoElement,
-            timestamp: number
-          ) => { faceLandmarks?: Array<Array<{ x: number; y: number; z?: number }>> };
-        }
+        detectForVideo: (
+          video: HTMLVideoElement,
+          timestamp: number
+        ) => { faceLandmarks?: Array<Array<{ x: number; y: number; z?: number }>> };
+      }
       | null;
 
-    if (!video || !canvas || !detector) return;
+    if (!video || !canvas || !detector || !streamRef.current || detectorRef.current !== detector) return;
     const context = canvas.getContext('2d');
     if (!context) return;
+
+    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth || !video.videoHeight) {
+      animationRef.current = requestAnimationFrame(scanLoop);
+      return;
+    }
 
     canvas.width = video.videoWidth || 960;
     canvas.height = video.videoHeight || 540;
     const now = performance.now();
-    const result = detector.detectForVideo(video, now);
+    let result: { faceLandmarks?: Array<Array<{ x: number; y: number; z?: number }>> };
+    try {
+      result = detector.detectForVideo(video, now);
+    } catch {
+      setFaceInGuide(false);
+      setCurrentFace(null);
+      setMessage('Bộ nhận diện khuôn mặt đang khởi động lại. Vui lòng giữ camera mở.');
+      animationRef.current = requestAnimationFrame(scanLoop);
+      return;
+    }
     const landmarks = result.faceLandmarks?.[0]?.map((point) => ({
       x: clampNormalizedCoordinate(point.x),
       y: clampNormalizedCoordinate(point.y),
@@ -539,7 +576,7 @@ export function FaceIdPanel({ employees, mode, onDone, isAdmin = false }: FaceId
   const selectedEmployee = activeEmployees.find((employee) => employee.employeeId === Number(selectedEmployeeId));
 
   return (
-    <section className="face-layout">
+    <section ref={faceLayoutRef} className={isFullscreen && mode === 'attendance' ? 'face-layout attendance-fullscreen' : 'face-layout'}>
       <div className="panel scanner-panel">
         <div className="panel-header">
           <div>
@@ -550,7 +587,11 @@ export function FaceIdPanel({ employees, mode, onDone, isAdmin = false }: FaceId
                 : 'Hệ thống tự quét chính diện, mặt trái, mặt phải và kiểm tra lại sau khi lưu.'}
             </p>
           </div>
-          {busy && <Loader2 className="spin" size={22} />}
+          <div className="attendance-panel-actions">
+            {mode === 'attendance' && <AttendanceClock serverTime={serverTime} />}
+            {mode === 'attendance' && <button className="icon-button" type="button" onClick={() => void toggleFullscreen()} title={isFullscreen ? 'Thoát toàn màn hình' : 'Mở toàn màn hình camera'}>{isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</button>}
+            {busy && <Loader2 className="spin" size={22} />}
+          </div>
         </div>
 
         {mode === 'attendance' && isAdmin && (
@@ -687,8 +728,8 @@ export function FaceIdPanel({ employees, mode, onDone, isAdmin = false }: FaceId
                   {enrollmentFailureStep === 'VERIFY'
                     ? 'Thất bại'
                     : enrollmentStage === 'success'
-                    ? 'Đã khớp'
-                    : enrollmentStage === 'verify'
+                      ? 'Đã khớp'
+                      : enrollmentStage === 'verify'
                         ? 'Đang kiểm tra'
                         : 'Đang chờ'}
                 </strong>
@@ -733,6 +774,20 @@ export function FaceIdPanel({ employees, mode, onDone, isAdmin = false }: FaceId
       </aside>
     </section>
   );
+}
+
+function AttendanceClock({ serverTime }: { serverTime: string | null }) {
+  const [clock, setClock] = useState(() => new Date(serverTime ?? Date.now()));
+
+  useEffect(() => {
+    const offset = serverTime ? new Date(serverTime).getTime() - Date.now() : 0;
+    const updateClock = () => setClock(new Date(Date.now() + offset));
+    updateClock();
+    const intervalId = window.setInterval(updateClock, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [serverTime]);
+
+  return <div className="attendance-clock" title="Giờ hiện tại theo timestamp máy chủ"><Clock3 size={17} /><strong>{new Intl.DateTimeFormat('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(clock)}</strong></div>;
 }
 
 function buildVerificationPayload(face: CapturedFace) {

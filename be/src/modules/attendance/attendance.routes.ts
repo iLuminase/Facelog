@@ -1,17 +1,58 @@
 import { Router } from 'express';
-import type { RowDataPacket } from 'mysql2';
+import type { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { z } from 'zod';
 import { requireAuth, requireRoles, type AuthenticatedRequest } from '../../auth/middleware.js';
 import { verifyAuthToken } from '../../auth/token.js';
+import { env } from '../../config/env.js';
 import { writeAuditLog } from '../../db/audit.js';
 import { pool } from '../../db/pool.js';
-import { env } from '../../config/env.js';
 import { asyncHandler } from '../../http/async-handler.js';
 import { AppError } from '../../http/errors.js';
 import { verifyFaceSchema } from '../faceid/faceid.schemas.js';
 import { verifyFace } from '../faceid/faceid.service.js';
 
 export const attendanceRouter = Router();
+
+async function closeExpiredOpenSessions(employeeId?: number) {
+  const filters = [
+    'ads.first_check_in IS NOT NULL',
+    'ads.last_check_out IS NULL',
+    'ads.work_date < CURDATE()',
+    `NOW() >= CASE WHEN s.is_overnight = 1
+      THEN DATE_ADD(TIMESTAMP(ads.work_date, s.end_time), INTERVAL 1 DAY)
+      ELSE TIMESTAMP(ads.work_date, s.end_time) END`
+  ];
+  const params: number[] = [];
+  if (employeeId) {
+    filters.unshift('ads.employee_id = ?');
+    params.push(employeeId);
+  }
+
+  await pool.execute<ResultSetHeader>(`
+    UPDATE attendance_daily_summary ads
+    JOIN shifts s ON s.shift_id = ads.shift_id
+    SET
+      ads.last_check_out = CASE WHEN s.is_overnight = 1
+        THEN DATE_ADD(TIMESTAMP(ads.work_date, s.end_time), INTERVAL 1 DAY)
+        ELSE TIMESTAMP(ads.work_date, s.end_time) END,
+      ads.worked_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, ads.first_check_in,
+        CASE WHEN s.is_overnight = 1
+          THEN DATE_ADD(TIMESTAMP(ads.work_date, s.end_time), INTERVAL 1 DAY)
+          ELSE TIMESTAMP(ads.work_date, s.end_time) END
+      ) - CASE WHEN TIMESTAMPDIFF(MINUTE, ads.first_check_in,
+        CASE WHEN s.is_overnight = 1
+          THEN DATE_ADD(TIMESTAMP(ads.work_date, s.end_time), INTERVAL 1 DAY)
+          ELSE TIMESTAMP(ads.work_date, s.end_time) END
+      ) >= COALESCE(s.standard_work_minutes, 480) THEN COALESCE(s.break_minutes, 0) ELSE 0 END),
+      ads.early_leave_minutes = 0,
+      ads.overtime_minutes = 0,
+      ads.work_units = 2.00,
+      ads.missing_check_out = 0,
+      ads.status = CASE WHEN ads.late_minutes > 0 THEN 'LATE' ELSE 'PRESENT' END
+    WHERE ${filters.join(' AND ')}`,
+    params
+  );
+}
 
 attendanceRouter.post(
   '/face-check',
@@ -35,15 +76,21 @@ attendanceRouter.post(
     const verification = await verifyFace(body.descriptor, body.quality, body.liveness, body.deviceId);
 
     if (!verification.matched || !verification.match) {
+      const verificationMessages: Record<string, string> = {
+        LOW_CONFIDENCE: 'Khuôn mặt chưa đủ rõ. Hãy đưa mặt gần camera hơn và đảm bảo đủ ánh sáng.',
+        LIVENESS_FAILED: 'Không xác minh được người thật. Hãy nhìn thẳng và giữ khuôn mặt ổn định.',
+        UNKNOWN_FACE: 'Chưa nhận diện được khuôn mặt. Hãy đăng ký FaceID cho nhân viên trước khi chấm công.'
+      };
       return res.status(422).json({
         success: false,
         code: verification.result,
-        message: 'Không nhận diện được khuôn mặt',
+        message: verificationMessages[verification.result] ?? 'Không nhận diện được khuôn mặt',
         data: verification
       });
     }
 
     const employeeId = verification.match.employeeId;
+    await closeExpiredOpenSessions(employeeId);
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
@@ -123,11 +170,6 @@ attendanceRouter.post(
           'CHECK_IN_WINDOW_CLOSED');
       }
 
-      if (!requiresAdmin && body.eventType === 'AUTO' && lastEvent?.eventType === 'CHECK_IN' && Number(assignedShift.secondsUntilCheckOut) > 0) {
-        const openTime = new Intl.DateTimeFormat('vi-VN', { hour: '2-digit', minute: '2-digit' }).format(new Date(assignedShift.checkOutOpensAt));
-        throw new AppError(409, `Đã chấm giờ vào. Giờ ra được mở từ ${openTime}`, 'CHECK_OUT_NOT_OPEN');
-      }
-
       const eventType = body.eventType === 'AUTO'
         ? !lastEvent || (body.debug && lastEvent.eventType === 'CHECK_OUT') ? 'CHECK_IN' : 'CHECK_OUT'
         : body.eventType;
@@ -194,6 +236,7 @@ attendanceRouter.post(
             ELSE GREATEST(0, TIMESTAMPDIFF(MINUTE, CASE WHEN s.is_overnight=1
               THEN DATE_ADD(TIMESTAMP(?,s.end_time),INTERVAL 1 DAY) ELSE TIMESTAMP(?,s.end_time) END,
               ce.lastCheckOut)) END AS overtimeMinutes
+              ,CASE WHEN ce.lastCheckOut IS NULL THEN 0.00 ELSE 2.00 END AS workUnits
         FROM canonical_events ce
         JOIN shifts s ON s.shift_id=?
         LIMIT 1
@@ -209,9 +252,9 @@ attendanceRouter.post(
         `
         INSERT INTO attendance_daily_summary (
           employee_id, work_date, shift_id, first_check_in, last_check_out,
-          worked_minutes, late_minutes, early_leave_minutes, overtime_minutes,
+          worked_minutes, work_units, late_minutes, early_leave_minutes, overtime_minutes,
           missing_check_out, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
           shift_id = VALUES(shift_id),
           first_check_in = CASE
@@ -220,12 +263,13 @@ attendanceRouter.post(
             ELSE VALUES(first_check_in)
           END,
           last_check_out = VALUES(last_check_out), worked_minutes = VALUES(worked_minutes),
+          work_units = VALUES(work_units),
           late_minutes = VALUES(late_minutes), early_leave_minutes = VALUES(early_leave_minutes),
           overtime_minutes = VALUES(overtime_minutes), missing_check_out = VALUES(missing_check_out),
           status = VALUES(status)
         `,
         [employeeId, summary.workDate, summary.shiftId ?? null, summary.firstCheckIn, summary.lastCheckOut,
-          summary.workedMinutes, summary.lateMinutes, summary.earlyLeaveMinutes, summary.overtimeMinutes,
+          summary.workedMinutes, summary.workUnits, summary.lateMinutes, summary.earlyLeaveMinutes, summary.overtimeMinutes,
           summary.lastCheckOut ? 0 : 1, status]
       );
 
@@ -251,7 +295,7 @@ attendanceRouter.post(
             debug: {
               enabled: true,
               actor: { userId: adminAuth!.userId, username: adminAuth!.username, role: adminAuth!.role },
-              bypassedRules: ['DUPLICATE_ATTENDANCE', 'ATTENDANCE_ALREADY_COMPLETED', 'CHECK_OUT_NOT_OPEN'],
+              bypassedRules: ['DUPLICATE_ATTENDANCE', 'ATTENDANCE_ALREADY_COMPLETED'],
               serverTime: new Date().toISOString()
             }
           } : {})
@@ -271,6 +315,7 @@ attendanceRouter.get(
   requireAuth,
   requireRoles('SUPER_ADMIN', 'HR_MANAGER', 'HR_STAFF', 'SECURITY'),
   asyncHandler(async (req, res) => {
+    await closeExpiredOpenSessions();
     const query = z.object({
       keyword: z.string().trim().max(150).optional(),
       from: z.string().date().optional(),
@@ -318,7 +363,7 @@ attendanceRouter.get(
           e.employee_id AS employeeId, e.employee_code AS employeeCode, e.full_name AS fullName,
           d.department_name AS departmentName, p.position_name AS positionName, s.shift_name AS shiftName,
           ads.first_check_in AS firstCheckIn, ads.last_check_out AS lastCheckOut,
-          ads.worked_minutes AS workedMinutes, ads.late_minutes AS lateMinutes,
+          ads.worked_minutes AS workedMinutes, ads.work_units AS workUnits, ads.late_minutes AS lateMinutes,
           ads.early_leave_minutes AS earlyLeaveMinutes, ads.overtime_minutes AS overtimeMinutes,
           ads.status, ads.approval_status AS approvalStatus, ads.updated_at AS updatedAt
         ${fromSql}
@@ -335,6 +380,7 @@ attendanceRouter.get(
           SUM(CASE WHEN ads.early_leave_minutes>0 THEN 1 ELSE 0 END) AS earlyLeaveCount,
           SUM(CASE WHEN ads.overtime_minutes>0 THEN 1 ELSE 0 END) AS overtimeCount,
           COALESCE(SUM(ads.late_minutes),0) AS totalLateMinutes,
+          COALESCE(SUM(ads.work_units),0) AS totalWorkUnits,
           COALESCE(ROUND(AVG(ads.worked_minutes)),0) AS averageWorkedMinutes
         ${fromSql}`, params),
       pool.query<RowDataPacket[]>(`
@@ -361,6 +407,7 @@ attendanceRouter.get(
         earlyLeaveCount: Number(stats.earlyLeaveCount ?? 0),
         overtimeCount: Number(stats.overtimeCount ?? 0),
         totalLateMinutes: Number(stats.totalLateMinutes ?? 0),
+        totalWorkUnits: Number(stats.totalWorkUnits ?? 0),
         averageWorkedMinutes: Number(stats.averageWorkedMinutes ?? 0),
         daily: dailyRows.reverse().map((row) => ({
           workDate: String(row.workDate), total: Number(row.total ?? 0),

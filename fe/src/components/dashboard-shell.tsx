@@ -1,25 +1,27 @@
 'use client';
 
 import {
+  AttendanceAnalytics, AttendanceRow, AttendanceSessionDetail, AuditRow, AuthUser, EmployeeInput, EmployeeMeta, EmployeeRow, Pagination,
+  createEmployee, deleteAttendanceSession, deleteEmployee, getAttendanceReport,
+  getAttendanceSessionDetail,
+  getAuditLogs, getEmployeeMeta,
+  getEmployees, getHealth, updateEmployee
+} from '@/lib/api';
+import {
   Activity, ArrowUpDown, BarChart3, CalendarClock, Camera, ChevronLeft, ChevronRight, Clock3, Download,
   Edit2, Eye, FileClock, FilterX, Loader2, LogOut, Plus, RefreshCw, ScanFace, Search, ShieldCheck, Trash2, UserCog, Users
 } from 'lucide-react';
 import Image from 'next/image';
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-import {
-  AttendanceAnalytics, AttendanceRow, AttendanceSessionDetail, AuditRow, AuthUser, EmployeeInput, EmployeeMeta, EmployeeRow, Pagination,
-  createEmployee, deleteAttendanceSession, deleteEmployee, getAttendanceReport, getAuditLogs, getEmployeeMeta,
-  getAttendanceSessionDetail, getEmployees, getHealth, updateEmployee
-} from '@/lib/api';
-import { FaceIdPanel } from './faceid-panel';
 import { AccountPanel, ShiftPanel } from './admin-panels';
+import { FaceIdPanel } from './faceid-panel';
 
 type ViewKey = 'dashboard' | 'employees' | 'attendance' | 'faceid' | 'reports' | 'shifts' | 'accounts' | 'audit';
 type SortOrder = 'asc' | 'desc';
 const emptyPagination: Pagination = { page: 1, pageSize: 10, total: 0, totalPages: 0 };
 const emptyAttendanceAnalytics: AttendanceAnalytics = {
   totalRecords: 0, presentCount: 0, lateCount: 0, incompleteCount: 0,
-  earlyLeaveCount: 0, overtimeCount: 0, totalLateMinutes: 0, averageWorkedMinutes: 0, daily: []
+  earlyLeaveCount: 0, overtimeCount: 0, totalLateMinutes: 0, totalWorkUnits: 0, averageWorkedMinutes: 0, daily: []
 };
 
 const navItems: Array<{ key: ViewKey; label: string; icon: React.ComponentType<{ size?: number }> }> = [
@@ -56,6 +58,11 @@ function formatDateTime(value: string | null) {
   return new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
 }
 
+function formatWorkUnits(value: unknown) {
+  const units = Number(value);
+  return Number.isFinite(units) ? units.toFixed(2) : '0.00';
+}
+
 function localDate(date = new Date()) {
   const offset = date.getTimezoneOffset() * 60_000;
   return new Date(date.getTime() - offset).toISOString().slice(0, 10);
@@ -67,6 +74,8 @@ export function DashboardShell({ currentUser, onLogout }: { currentUser: AuthUse
   const canViewAudit = ['SUPER_ADMIN', 'HR_MANAGER'].includes(currentUser.role);
   const [activeView, setActiveView] = useState<ViewKey>('dashboard');
   const [health, setHealth] = useState<'checking' | 'online' | 'offline'>('checking');
+  const [serverTime, setServerTime] = useState<string | null>(null);
+  const [offlineNotice, setOfflineNotice] = useState(false);
   const [loading, setLoading] = useState(true);
   const [faceEmployees, setFaceEmployees] = useState<EmployeeRow[]>([]);
   const [recentAttendance, setRecentAttendance] = useState<AttendanceRow[]>([]);
@@ -101,21 +110,23 @@ export function DashboardShell({ currentUser, onLogout }: { currentUser: AuthUse
 
   const loadCore = useCallback(async () => {
     setLoading(true);
-    try {
-      const [healthResult, employeesResult, attendanceResult, metaResult] = await Promise.all([
-        getHealth(), canManageHr ? getEmployees({ status: 'ACTIVE', pageSize: 100 }) : Promise.resolve({ data: [] as EmployeeRow[], pagination: emptyPagination }),
-        canViewReports ? getAttendanceReport({ pageSize: 8, ...recentSort }) : Promise.resolve({ data: [] as AttendanceRow[], pagination: emptyPagination }),
-        canManageHr ? getEmployeeMeta() : Promise.resolve({ departments: [], positions: [] })
-      ]);
+    const [healthResult, employeesResult, attendanceResult, metaResult] = await Promise.all([
+      getHealth().catch(() => null),
+      canManageHr ? getEmployees({ status: 'ACTIVE', pageSize: 100 }).catch(() => null) : Promise.resolve(null),
+      canViewReports ? getAttendanceReport({ pageSize: 8, ...recentSort }).catch(() => null) : Promise.resolve(null),
+      canManageHr ? getEmployeeMeta().catch(() => null) : Promise.resolve(null)
+    ]);
+    if (healthResult) {
       setHealth(healthResult.database === 'ok' ? 'online' : 'offline');
-      setFaceEmployees(employeesResult.data);
+      setServerTime(healthResult.timestamp);
+    } else setHealth('offline');
+    if (employeesResult) setFaceEmployees(employeesResult.data);
+    if (attendanceResult) {
       setRecentAttendance(attendanceResult.data);
       setReportUpdatedAt(new Date());
-      setMeta(metaResult);
-    } catch (error) {
-      setHealth('offline');
-      setNotice(error instanceof Error ? error.message : 'Không thể tải dữ liệu');
-    } finally { setLoading(false); }
+    }
+    if (metaResult) setMeta(metaResult);
+    setLoading(false);
   }, [canManageHr, canViewReports, recentSort]);
 
   const loadEmployeeRows = useCallback(async () => {
@@ -150,28 +161,49 @@ export function DashboardShell({ currentUser, onLogout }: { currentUser: AuthUse
   useEffect(() => { void loadAuditRows(); }, [loadAuditRows]);
 
   useEffect(() => {
+    if (health !== 'offline') {
+      setOfflineNotice(false);
+      return;
+    }
+    setOfflineNotice(true);
+    const timeoutId = window.setTimeout(() => setOfflineNotice(false), 10_000);
+    return () => window.clearTimeout(timeoutId);
+  }, [health]);
+
+  useEffect(() => {
     if (!canViewReports || (activeView !== 'dashboard' && activeView !== 'reports')) return;
     let disposed = false;
     let refreshing = false;
+    let failureCount = 0;
+    let retryAfter = 0;
     const refreshLiveAttendance = async () => {
-      if (disposed || refreshing || document.visibilityState !== 'visible') return;
+      if (disposed || refreshing || document.visibilityState !== 'visible' || Date.now() < retryAfter) return;
       refreshing = true;
       try {
         if (activeView === 'reports') {
-          await loadReportRows();
+          const result = await getAttendanceReport(reportQuery);
+          if (!disposed) {
+            setReportRows(result.data);
+            setReportPagination(result.pagination);
+            setReportAnalytics(result.analytics);
+            setReportUpdatedAt(new Date());
+          }
         } else {
           const result = await getAttendanceReport({ pageSize: 8, ...recentSort });
           if (!disposed) { setRecentAttendance(result.data); setReportUpdatedAt(new Date()); }
         }
+        failureCount = 0;
+        retryAfter = 0;
       } catch {
-        // Giữ dữ liệu gần nhất khi một nhịp realtime tạm thời thất bại.
+        failureCount += 1;
+        retryAfter = Date.now() + Math.min(30_000, 2_000 * 2 ** Math.min(failureCount - 1, 4));
       } finally { refreshing = false; }
     };
-    const intervalId = window.setInterval(() => void refreshLiveAttendance(), 2000);
+    const intervalId = window.setInterval(() => void refreshLiveAttendance(), 1000);
     const onVisibilityChange = () => { if (document.visibilityState === 'visible') void refreshLiveAttendance(); };
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => { disposed = true; window.clearInterval(intervalId); document.removeEventListener('visibilitychange', onVisibilityChange); };
-  }, [activeView, canViewReports, loadReportRows, recentSort]);
+  }, [activeView, canViewReports, reportQuery, recentSort]);
 
   const activeCount = faceEmployees.length;
   const faceReadyCount = faceEmployees.filter((employee) => employee.faceStatus === 'ACTIVE').length;
@@ -306,7 +338,6 @@ export function DashboardShell({ currentUser, onLogout }: { currentUser: AuthUse
             </button>);
         })}</nav>
         <div className="sidebar-user"><div className="avatar">{(currentUser.fullName ?? currentUser.username).slice(0, 1)}</div><div><strong>{currentUser.fullName ?? currentUser.username}</strong><span>{currentUser.role}</span></div><button title="Đăng xuất" type="button" onClick={onLogout}><LogOut size={17} /></button></div>
-        <div className={`connection ${health}`}><span />Backend {health === 'online' ? 'online' : health === 'offline' ? 'offline' : 'đang kiểm tra'}</div>
       </aside>
 
       <section className="workspace">
@@ -328,6 +359,7 @@ export function DashboardShell({ currentUser, onLogout }: { currentUser: AuthUse
           </div>
         </header>
         {notice && <div className="notice"><span>{notice}</span><button type="button" onClick={() => setNotice(null)}>×</button></div>}
+        {offlineNotice && <div className="backend-offline-toast" role="status"><span />Không thể kết nối backend. Hệ thống sẽ tự thử lại.</div>}
 
         {activeView === 'dashboard' && <div className="content-stack">
           <section className="metric-grid">
@@ -336,7 +368,7 @@ export function DashboardShell({ currentUser, onLogout }: { currentUser: AuthUse
             <Metric icon={Clock3} label="Lượt đi trễ gần đây" value={lateCount} tone="amber" />
             <Metric icon={Activity} label="Cần xử lý" value={incompleteCount} tone="red" />
           </section>
-          <section className="panel"><div className="panel-header"><div><h2>Nhật ký gần đây</h2><p>Dữ liệu tổng hợp chấm công mới nhất</p></div><LiveStatus updatedAt={reportUpdatedAt} /></div><AttendanceTable rows={recentAttendance} onSort={sortRecent} onView={(row) => void showAttendanceDetail(row)} detailLoading={detailLoading} /></section>
+          <section className="panel"><div className="panel-header"><div><h2>Nhật ký gần đây</h2><p>Dữ liệu tổng hợp chấm công mới nhất</p></div><LiveStatus updatedAt={reportUpdatedAt} serverTime={serverTime} /></div><AttendanceTable rows={recentAttendance} onSort={sortRecent} onView={(row) => void showAttendanceDetail(row)} detailLoading={detailLoading} /></section>
         </div>}
 
         {activeView === 'employees' && <section className="panel">
@@ -351,11 +383,11 @@ export function DashboardShell({ currentUser, onLogout }: { currentUser: AuthUse
           <Pager pagination={employeePagination} onPage={(page) => setEmployeeQuery((current) => ({ ...current, page }))} />
         </section>}
 
-        {activeView === 'attendance' && <FaceIdPanel key="attendance" employees={faceEmployees} mode="attendance" onDone={refreshAll} isAdmin={currentUser.role === 'SUPER_ADMIN'} />}
-        {activeView === 'faceid' && <FaceIdPanel key="enroll" employees={faceEmployees} mode="enroll" onDone={refreshAll} isAdmin={currentUser.role === 'SUPER_ADMIN'} />}
+        {activeView === 'attendance' && <FaceIdPanel key="attendance" employees={faceEmployees} mode="attendance" onDone={refreshAll} isAdmin={currentUser.role === 'SUPER_ADMIN'} serverTime={serverTime} />}
+        {activeView === 'faceid' && <FaceIdPanel key="enroll" employees={faceEmployees} mode="enroll" onDone={refreshAll} isAdmin={currentUser.role === 'SUPER_ADMIN'} serverTime={serverTime} />}
 
         {activeView === 'reports' && <section className="panel">
-          <div className="panel-header"><div><h2>Báo cáo chấm công</h2><p>{reportPagination.total} dòng dữ liệu phù hợp</p></div><div className="topbar-actions"><LiveStatus updatedAt={reportUpdatedAt} /><button className="button secondary" type="button" onClick={() => void exportExcel()} disabled={!reportPagination.total || exportingReport}>{exportingReport ? <Loader2 size={17} className="spin" /> : <Download size={17} />}{exportingReport ? 'Đang tạo Excel...' : 'Xuất Excel đầy đủ'}</button></div></div>
+          <div className="panel-header"><div><h2>Báo cáo chấm công</h2><p>{reportPagination.total} dòng dữ liệu phù hợp</p></div><div className="topbar-actions"><LiveStatus updatedAt={reportUpdatedAt} serverTime={serverTime} /><button className="button secondary" type="button" onClick={() => void exportExcel()} disabled={!reportPagination.total || exportingReport}>{exportingReport ? <Loader2 size={17} className="spin" /> : <Download size={17} />}{exportingReport ? 'Đang tạo Excel...' : 'Xuất Excel đầy đủ'}</button></div></div>
           <form className="filter-bar report-filters" onSubmit={(event) => { event.preventDefault(); setReportQuery((current) => ({ ...current, keyword: reportSearch, page: 1 })); }}>
             <label className="search-box"><Search size={17} /><input value={reportSearch} onChange={(event) => setReportSearch(event.target.value)} placeholder="Tìm mã hoặc tên nhân viên..." /></label>
             <input aria-label="Từ ngày" type="date" value={reportQuery.from} onChange={(event) => setReportQuery((current) => ({ ...current, from: event.target.value, page: 1 }))} />
@@ -390,8 +422,19 @@ function Metric({ icon: Icon, label, value, tone }: { icon: React.ComponentType<
   return <article className={`metric ${tone}`}><div className="metric-icon"><Icon size={20} /></div><div><span>{label}</span><strong>{value}</strong></div></article>;
 }
 
-function LiveStatus({ updatedAt }: { updatedAt: Date | null }) {
-  return <div className="live-status" title="Báo cáo tự động cập nhật mỗi 2 giây"><span />Realtime · {updatedAt ? updatedAt.toLocaleTimeString('vi-VN') : 'đang kết nối'}</div>;
+function LiveStatus({ updatedAt, serverTime }: { updatedAt: Date | null; serverTime: string | null }) {
+  const [clock, setClock] = useState(() => new Date(serverTime ?? Date.now()));
+
+  useEffect(() => {
+    const offset = serverTime ? new Date(serverTime).getTime() - Date.now() : 0;
+    const updateClock = () => setClock(new Date(Date.now() + offset));
+    updateClock();
+    const intervalId = window.setInterval(updateClock, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [serverTime]);
+
+  const time = new Intl.DateTimeFormat('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(clock);
+  return <div className="live-status" title="Giờ hệ thống lấy từ máy chủ backend và được đồng bộ theo timestamp máy chủ"><span />Giờ hệ thống {time} {updatedAt && <small>· cập nhật {new Intl.DateTimeFormat('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(updatedAt)}</small>}</div>;
 }
 
 function SortHead({ label, field, onSort }: { label: string; field: string; onSort: (field: string) => void }) {
@@ -411,7 +454,7 @@ function ReportAnalyticsPanel({ analytics }: { analytics: AttendanceAnalytics })
   return (
     <div className="report-analytics">
       <div className="report-kpi-grid">
-        <div className="report-kpi total"><BarChart3 size={21} /><span>Tổng ca ghi nhận</span><strong>{analytics.totalRecords}</strong><small>{analytics.presentCount} ca đúng giờ</small></div>
+        <div className="report-kpi total"><BarChart3 size={21} /><span>Tổng công ghi nhận</span><strong>{formatWorkUnits(analytics.totalWorkUnits)}</strong><small>{analytics.totalRecords} ngày có chấm công</small></div>
         <div className="report-kpi late"><Clock3 size={21} /><span>Ca đi trễ</span><strong>{analytics.lateCount}</strong><small>{analytics.totalLateMinutes} phút đi trễ</small></div>
         <div className="report-kpi incomplete"><LogOut size={21} /><span>Quên chấm ra</span><strong>{analytics.incompleteCount}</strong><small>Cần HR kiểm tra</small></div>
         <div className="report-kpi early"><Activity size={21} /><span>Ca về sớm</span><strong>{analytics.earlyLeaveCount}</strong><small>TB {analytics.averageWorkedMinutes} phút công</small></div>
@@ -467,20 +510,20 @@ async function downloadAttendanceWorkbook(
 
   const summary = workbook.addWorksheet('Tổng quan', { views: [{ showGridLines: false }] });
   summary.columns = Array.from({ length: 8 }, () => ({ width: 18 }));
-  summary.mergeCells('A1:H2');
+  summary.mergeCells('A1:N2');
   const title = summary.getCell('A1');
   title.value = 'BÁO CÁO TỔNG QUAN CHẤM CÔNG';
   title.font = { name: 'Arial', size: 20, bold: true, color: { argb: 'FFFFFFFF' } };
   title.alignment = { vertical: 'middle', horizontal: 'center' };
   title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF173B67' } };
 
-  summary.mergeCells('A3:H3');
+  summary.mergeCells('A3:N3');
   summary.getCell('A3').value = `Kỳ báo cáo: ${filters.from || 'Tất cả'} → ${filters.to || 'Hiện tại'}  |  Phòng ban: ${filters.department || 'Tất cả'}  |  Trạng thái: ${filters.status || 'Tất cả'}`;
   summary.getCell('A3').alignment = { horizontal: 'center' };
   summary.getCell('A3').font = { italic: true, color: { argb: 'FF64748B' } };
 
   const kpis = [
-    { range: 'A5:B6', label: 'TỔNG CA', value: analytics.totalRecords, color: 'FF2563EB' },
+    { range: 'A5:B6', label: 'TỔNG CÔNG', value: formatWorkUnits(analytics.totalWorkUnits), color: 'FF2563EB' },
     { range: 'C5:D6', label: 'ĐI TRỄ', value: analytics.lateCount, color: 'FFF59E0B' },
     { range: 'E5:F6', label: 'QUÊN CHẤM RA', value: analytics.incompleteCount, color: 'FFDC2626' },
     { range: 'G5:H6', label: 'VỀ SỚM', value: analytics.earlyLeaveCount, color: 'FF7C3AED' }
@@ -508,20 +551,21 @@ async function downloadAttendanceWorkbook(
   });
   for (let row = 10; row <= 13; row += 1) summary.getCell(`C${row}`).numFmt = '0.0%';
   summary.getCell('A15').value = `Tổng phút đi trễ: ${analytics.totalLateMinutes}`;
-  summary.getCell('A16').value = `Thời gian làm việc trung bình: ${analytics.averageWorkedMinutes} phút/ca`;
-  summary.getCell('A18').value = `Xuất lúc: ${formatDateTime(new Date().toISOString())}`;
-  summary.getCell('A18').font = { italic: true, color: { argb: 'FF64748B' } };
+  summary.getCell('A16').value = `Tổng công: ${formatWorkUnits(analytics.totalWorkUnits)} công`;
+  summary.getCell('A17').value = `Phút làm việc trung bình (chi tiết): ${analytics.averageWorkedMinutes} phút/ca`;
+  summary.getCell('A19').value = `Xuất lúc: ${formatDateTime(new Date().toISOString())}`;
+  summary.getCell('A19').font = { italic: true, color: { argb: 'FF64748B' } };
 
   const details = workbook.addWorksheet('Chi tiết chấm công', {
     views: [{ state: 'frozen', ySplit: 8, showGridLines: false }]
   });
-  details.mergeCells('A1:M2');
+  details.mergeCells('A1:N2');
   const detailTitle = details.getCell('A1');
   detailTitle.value = 'CHI TIẾT CHẤM CÔNG NHÂN SỰ';
   detailTitle.font = { name: 'Arial', size: 18, bold: true, color: { argb: 'FFFFFFFF' } };
   detailTitle.alignment = { vertical: 'middle', horizontal: 'center' };
   detailTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF173B67' } };
-  details.mergeCells('A3:M3');
+  details.mergeCells('A3:N3');
   details.getCell('A3').value = `${rows.length} ca · ${filters.from || 'Tất cả'} → ${filters.to || 'Hiện tại'}`;
   details.getCell('A3').alignment = { horizontal: 'center' };
   details.getCell('A3').font = { color: { argb: 'FF64748B' }, italic: true };
@@ -531,22 +575,22 @@ async function downloadAttendanceWorkbook(
     style: { theme: 'TableStyleMedium2', showRowStripes: true },
     columns: [
       'STT', 'Ngày', 'Mã NV', 'Họ tên', 'Phòng ban', 'Ca làm', 'Giờ vào', 'Giờ ra',
-      'Phút công', 'Đi trễ', 'Về sớm', 'Tăng ca', 'Trạng thái'
+      'Công', 'Phút làm việc', 'Đi trễ', 'Về sớm', 'Tăng ca', 'Trạng thái'
     ].map((name) => ({ name })),
     rows: rows.map((row, index) => [
       index + 1, row.workDate, row.employeeCode, row.fullName, row.departmentName ?? '-', row.shiftName ?? '-',
-      formatDateTime(row.firstCheckIn), formatDateTime(row.lastCheckOut), row.workedMinutes,
-      row.lateMinutes, row.earlyLeaveMinutes, row.overtimeMinutes, statusLabel(row.status)
+      formatDateTime(row.firstCheckIn), formatDateTime(row.lastCheckOut), Number(row.workUnits) || 0,
+      row.workedMinutes, row.lateMinutes, row.earlyLeaveMinutes, row.overtimeMinutes, statusLabel(row.status)
     ])
   });
-  const widths = [7, 13, 13, 26, 22, 18, 20, 20, 12, 11, 11, 11, 18];
+  const widths = [7, 13, 13, 26, 22, 18, 20, 20, 10, 14, 11, 11, 11, 18];
   widths.forEach((width, index) => { details.getColumn(index + 1).width = width; });
   details.getRow(8).height = 28;
   for (let index = 0; index < rows.length; index += 1) {
     const sheetRow = details.getRow(index + 9);
     sheetRow.alignment = { vertical: 'middle' };
     const source = rows[index];
-    const statusCell = sheetRow.getCell(13);
+    const statusCell = sheetRow.getCell(14);
     if (source.status === 'INCOMPLETE' || !source.lastCheckOut) {
       statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFECACA' } };
       statusCell.font = { bold: true, color: { argb: 'FF991B1B' } };
@@ -557,10 +601,10 @@ async function downloadAttendanceWorkbook(
       statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
       statusCell.font = { bold: true, color: { argb: 'FF166534' } };
     }
-    if (source.earlyLeaveMinutes > 0) sheetRow.getCell(11).font = { bold: true, color: { argb: 'FF7C3AED' } };
-    if (source.overtimeMinutes > 0) sheetRow.getCell(12).font = { bold: true, color: { argb: 'FF1D4ED8' } };
+    if (source.earlyLeaveMinutes > 0) sheetRow.getCell(12).font = { bold: true, color: { argb: 'FF7C3AED' } };
+    if (source.overtimeMinutes > 0) sheetRow.getCell(13).font = { bold: true, color: { argb: 'FF1D4ED8' } };
   }
-  details.autoFilter = { from: 'A8', to: 'M8' };
+  details.autoFilter = { from: 'A8', to: 'N8' };
 
   const buffer = await workbook.xlsx.writeBuffer();
   const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
@@ -580,9 +624,9 @@ function EmployeeTable({ employees, onSort, onEdit, onDelete }: { employees: Emp
 
 function AttendanceTable({ rows, onSort, onDelete, onView, deletingSession, detailLoading }: { rows: AttendanceRow[]; onSort: (field: string) => void; onDelete?: (row: AttendanceRow) => void; onView?: (row: AttendanceRow) => void; deletingSession?: string | null; detailLoading?: boolean }) {
   const hasActions = Boolean(onDelete || onView);
-  return <div className="table-wrap"><table><thead><tr><SortHead label="Ngày" field="workDate" onSort={onSort} /><SortHead label="Nhân viên" field="fullName" onSort={onSort} /><SortHead label="Phòng ban" field="departmentName" onSort={onSort} /><SortHead label="Vào" field="firstCheckIn" onSort={onSort} /><SortHead label="Ra" field="lastCheckOut" onSort={onSort} /><th>Phút công</th><SortHead label="Trễ" field="lateMinutes" onSort={onSort} /><SortHead label="Trạng thái" field="status" onSort={onSort} />{hasActions && <th>Thao tác</th>}</tr></thead><tbody>
-    {rows.map((row) => { const sessionKey = `${row.employeeId}:${row.workDate}`; return <tr key={row.summaryId}><td>{new Intl.DateTimeFormat('vi-VN').format(new Date(`${row.workDate}T00:00:00`))}</td><td><strong>{row.fullName}</strong><span className="subtext">{row.employeeCode}</span></td><td>{row.departmentName ?? '-'}</td><td>{formatDateTime(row.firstCheckIn)}</td><td>{formatDateTime(row.lastCheckOut)}</td><td>{row.workedMinutes}</td><td>{row.lateMinutes}</td><td><span className={`pill ${row.status === 'PRESENT' ? 'ok' : row.status === 'LATE' ? 'warn' : 'danger'}`}>{statusLabel(row.status)}</span></td>{hasActions && <td><div className="row-actions">{onView && <button title="Xem đầy đủ chi tiết sự kiện" type="button" disabled={detailLoading} onClick={() => onView(row)}><Eye size={16} /></button>}{onDelete && <button title="Xóa phiên để chấm công lại" className="danger-action" type="button" disabled={deletingSession === sessionKey} onClick={() => onDelete(row)}>{deletingSession === sessionKey ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}</button>}</div></td>}</tr>; })}
-    {!rows.length && <tr><td className="empty-cell" colSpan={hasActions ? 9 : 8}>Không có dữ liệu chấm công phù hợp</td></tr>}
+  return <div className="table-wrap"><table><thead><tr><SortHead label="Ngày" field="workDate" onSort={onSort} /><SortHead label="Nhân viên" field="fullName" onSort={onSort} /><SortHead label="Phòng ban" field="departmentName" onSort={onSort} /><SortHead label="Vào" field="firstCheckIn" onSort={onSort} /><SortHead label="Ra" field="lastCheckOut" onSort={onSort} /><th>Công</th><th>Phút làm việc</th><SortHead label="Trễ" field="lateMinutes" onSort={onSort} /><SortHead label="Trạng thái" field="status" onSort={onSort} />{hasActions && <th>Thao tác</th>}</tr></thead><tbody>
+    {rows.map((row) => { const sessionKey = `${row.employeeId}:${row.workDate}`; return <tr key={row.summaryId}><td>{new Intl.DateTimeFormat('vi-VN').format(new Date(`${row.workDate}T00:00:00`))}</td><td><strong>{row.fullName}</strong><span className="subtext">{row.employeeCode}</span></td><td>{row.departmentName ?? '-'}</td><td>{formatDateTime(row.firstCheckIn)}</td><td>{formatDateTime(row.lastCheckOut)}</td><td><strong>{formatWorkUnits(row.workUnits)}</strong></td><td>{row.workedMinutes}</td><td>{row.lateMinutes}</td><td><span className={`pill ${row.status === 'PRESENT' ? 'ok' : row.status === 'LATE' ? 'warn' : 'danger'}`}>{statusLabel(row.status)}</span></td>{hasActions && <td><div className="row-actions">{onView && <button title="Xem đầy đủ chi tiết sự kiện" type="button" disabled={detailLoading} onClick={() => onView(row)}><Eye size={16} /></button>}{onDelete && <button title="Xóa phiên để chấm công lại" className="danger-action" type="button" disabled={deletingSession === sessionKey} onClick={() => onDelete(row)}>{deletingSession === sessionKey ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}</button>}</div></td>}</tr>; })}
+    {!rows.length && <tr><td className="empty-cell" colSpan={hasActions ? 10 : 9}>Không có dữ liệu chấm công phù hợp</td></tr>}
   </tbody></table></div>;
 }
 
