@@ -2,6 +2,20 @@
 
 Hệ thống quản lý nhân sự và chấm công bằng FaceID, gồm Next.js frontend, Express/TypeScript backend và MariaDB/MySQL.
 
+## **ScreenShot**
+**1. Dashboard hệ thống.**
+<img width="1920" height="1020" alt="3 admin dash" src="https://github.com/user-attachments/assets/706b54e5-6e35-4442-9f14-96820247e71c" />
+**2. Quản lý nhân sự.**
+<img width="1920" height="1020" alt="5 ql nhan su" src="https://github.com/user-attachments/assets/011efa76-48c0-4e7a-9ff5-47cfdb5eba90" />
+**3. Camera chấm công tự động.**
+<img width="1920" height="1080" alt="7 cham cong" src="https://github.com/user-attachments/assets/0d18e9b4-44b9-442f-ac9e-a60f7c6ccbe4" />
+**4. Báo cáo thống kê.**
+<img width="1920" height="1020" alt="9 bc 1" src="https://github.com/user-attachments/assets/49eb7a55-d5b9-4721-966d-983ece68c007" />
+**5. Lịch sử chấm công.**
+<img width="1920" height="1020" alt="10 bc 2" src="https://github.com/user-attachments/assets/4debe233-ea98-40bd-9887-8aba2130f95e" />
+**6. Lịch sử hệ thống.**
+<img width="1920" height="1020" alt="14  audit" src="https://github.com/user-attachments/assets/78daf6bb-6e9c-434f-b369-9e56cff20dfa" />
+
 ## Chức năng
 
 - Đăng ký FaceID từ ba góc mặt và kiểm tra lại sau khi lưu.
